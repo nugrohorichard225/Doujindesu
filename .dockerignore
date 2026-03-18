@@ -1,0 +1,7 @@
+node_modules
+.git
+*.old.js
+.env
+.env.example
+README.md
+.gitignore
