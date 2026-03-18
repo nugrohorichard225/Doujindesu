@@ -444,6 +444,7 @@ app.get("/robots.txt", (req, res) => {
 Allow: /
 Crawl-delay: 2
 
+Sitemap: ${origin}/sitemap.xml
 Sitemap: ${origin}/sitemap-index.xml`;
 
   res.set({
@@ -454,15 +455,53 @@ Sitemap: ${origin}/sitemap-index.xml`;
 });
 
 // ============================================================
+// Route: Static Sitemap (manual/scraped)
+// ============================================================
+app.get("/sitemap.xml", (req, res) => {
+  const origin = getOrigin(req);
+  const mirrorHost = getMirrorHostname(req);
+  try {
+    const sitemapPath = join(new URL(".", import.meta.url).pathname, "sitemap-doujindesu.moe.xml");
+    let xml = readFileSync(sitemapPath, "utf-8");
+    // Replace hardcoded domain with mirror origin
+    xml = xml.replace(/https?:\/\/doujindesu\.moe/g, origin);
+    res.set({
+      "Content-Type": "application/xml; charset=utf-8",
+      "Cache-Control": "public, max-age=3600",
+      "X-Robots-Tag": "noindex",
+    });
+    res.status(200).send(xml);
+  } catch (err) {
+    console.error("Sitemap read error:", err.message);
+    // Fallback minimal sitemap
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${origin}/</loc>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>`;
+    res.set({ "Content-Type": "application/xml", "Cache-Control": "public, max-age=3600" });
+    res.status(200).send(xml);
+  }
+});
+
+// ============================================================
 // Route: Sitemap Index
 // ============================================================
 app.get("/sitemap-index.xml", async (req, res) => {
   const origin = getOrigin(req);
+  const today = new Date().toISOString().split("T")[0];
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <sitemap>
+    <loc>${origin}/sitemap.xml</loc>
+    <lastmod>${today}</lastmod>
+  </sitemap>
+  <sitemap>
     <loc>${origin}/sitemap-main.xml</loc>
-    <lastmod>${new Date().toISOString().split("T")[0]}</lastmod>
+    <lastmod>${today}</lastmod>
   </sitemap>
 </sitemapindex>`;
   res.set({ "Content-Type": "application/xml", "Cache-Control": "public, max-age=3600" });
