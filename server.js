@@ -172,7 +172,11 @@ async function curlFetch(url, options = {}) {
 
   // Body for POST
   if (options.body && method !== "GET" && method !== "HEAD") {
-    args.push("--data-binary", "@-");
+    if (typeof options.body === "string") {
+      args.push("--data-raw", options.body);
+    } else if (Buffer.isBuffer(options.body) && options.body.length > 0) {
+      args.push("--data-raw", options.body.toString("utf-8"));
+    }
   }
 
   // URL — encode any raw spaces/special chars that curl rejects
@@ -184,7 +188,6 @@ async function curlFetch(url, options = {}) {
       maxBuffer: 100 * 1024 * 1024, // 100MB
       timeout: 35000,
       encoding: "buffer",
-      ...(options.body ? { input: options.body } : {}),
     });
 
     // Parse response: headers are dumped first (separated by \r\n\r\n), then body
@@ -478,6 +481,56 @@ app.get("/admin/clear-cache", (req, res) => {
 });
 
 // ============================================================
+// Route: Chapter AJAX endpoint (load_data images)
+// ============================================================
+app.post("/themes/ajax/ch.php", async (req, res) => {
+  try {
+    const postBody = req.body ? req.body.toString("utf-8") : "";
+    const targetUrl = `https://${ORIGINAL_HOST}/themes/ajax/ch.php`;
+
+    const response = await curlFetch(targetUrl, {
+      method: "POST",
+      body: postBody,
+      referer: `https://${ORIGINAL_HOST}/`,
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "text/html, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        Origin: `https://${ORIGINAL_HOST}`,
+      },
+    });
+
+    let html = response.text();
+
+    // If CF blocked, return empty (client-side JS will handle fallback)
+    if (response.status === 403 || isCloudflareChallenge(html)) {
+      return res.status(200).send("");
+    }
+
+    // Rewrite image URLs in the AJAX response to use our proxy
+    const proxyImageDomains = ["desu.photos", "doujindesu.moe", "doujindesu.tv", "doujindesu.xxx", "cdn.doujindesu.dev", "doujindesu.dev"];
+    proxyImageDomains.forEach((domain) => {
+      const regex = new RegExp(`(src=["'])\\s*(https?://[^"']*${domain.replace(/\./g, "\\.")}[^"']*)(["'])`, "gi");
+      html = html.replace(regex, (match, pre, url, post) => {
+        return `${pre}${IMAGE_PROXY_PATH}${encodeURIComponent(url.trim())}${post}`;
+      });
+    });
+
+    res.set({
+      "Content-Type": "text/html; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.status(200).send(html);
+  } catch (error) {
+    console.error("AJAX ch.php error:", error.message);
+    res.status(200).send("");
+  }
+});
+
+// ============================================================
 // SEO Content Transformer
 // ============================================================
 function transformForSEO(document, targetUrl, origin, mirrorHostname, requestPath) {
@@ -757,7 +810,7 @@ app.all("*", async (req, res) => {
       .replace(/document\.addEventListener\s*\(\s*['"]contextmenu['"][^)]*\)/gi, "void(0)")
       .replace(/document\.oncontextmenu\s*=\s*function\s*\([^)]*\)\s*\{[^}]*\}/gi, "void(0)");
 
-    // Inject utility scripts
+    // Inject utility scripts + image proxy rewriter for dynamically loaded content
     const utilScript = `
       <script>
         document.addEventListener('contextmenu', function(e) { e.stopImmediatePropagation(); }, true);
@@ -769,6 +822,53 @@ app.all("*", async (req, res) => {
             e.preventDefault(); e.stopPropagation();
           }
         }, true);
+
+        // Rewrite dynamically loaded images (AJAX responses) to use image proxy
+        (function() {
+          var proxyDomains = ['desu.photos', 'cdn.doujindesu.dev', 'doujindesu.moe', 'doujindesu.tv', 'doujindesu.xxx', 'doujindesu.dev'];
+          var proxyPath = '/image-proxy/';
+          function shouldProxy(url) {
+            if (!url) return false;
+            for (var i = 0; i < proxyDomains.length; i++) {
+              if (url.indexOf(proxyDomains[i]) !== -1) return true;
+            }
+            return false;
+          }
+          function proxyImages(container) {
+            if (!container) return;
+            var imgs = container.querySelectorAll('img');
+            for (var i = 0; i < imgs.length; i++) {
+              var src = imgs[i].getAttribute('src');
+              if (src && shouldProxy(src) && src.indexOf(proxyPath) === -1) {
+                imgs[i].setAttribute('src', proxyPath + encodeURIComponent(src));
+              }
+              var dsrc = imgs[i].getAttribute('data-src');
+              if (dsrc && shouldProxy(dsrc) && dsrc.indexOf(proxyPath) === -1) {
+                imgs[i].setAttribute('data-src', proxyPath + encodeURIComponent(dsrc));
+              }
+            }
+          }
+          // Observe #anu for dynamic content injection
+          var anu = document.getElementById('anu');
+          if (anu) {
+            var observer = new MutationObserver(function(mutations) {
+              mutations.forEach(function(m) {
+                if (m.addedNodes.length > 0) proxyImages(anu);
+              });
+            });
+            observer.observe(anu, { childList: true, subtree: true });
+          }
+          // Also observe entire document for lazy-loaded images
+          var bodyObserver = new MutationObserver(function(mutations) {
+            mutations.forEach(function(m) {
+              for (var i = 0; i < m.addedNodes.length; i++) {
+                var node = m.addedNodes[i];
+                if (node.nodeType === 1) proxyImages(node);
+              }
+            });
+          });
+          if (document.body) bodyObserver.observe(document.body, { childList: true, subtree: true });
+        })();
       </script>
     `;
     processedHtml = processedHtml.replace(/<\/head>/i, `${utilScript}</head>`);
