@@ -32,7 +32,7 @@ if (!existsSync(COOKIE_DIR)) {
 // ============================================================
 // AdGuard DNS-over-HTTPS (DoH) Configuration
 // ============================================================
-const ADGUARD_DOH_URL = process.env.ADGUARD_DOH_URL || "https://dns.unitwise.online/dns-query";
+const ADGUARD_DOH_URL = process.env.ADGUARD_DOH_URL || "https://dns.ratewise.es/dns-query";
 
 // ============================================================
 // Comprehensive Ad Domain Blocklist
